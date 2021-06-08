@@ -1,0 +1,207 @@
+4.1.
+SELECT air.city,
+       COUNT (DISTINCT air.airport_name)
+FROM dst_project.airports air
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 2
+
+4.2.1
+SELECT count(DISTINCT f.status)
+FROM dst_project.flights f
+
+4.2.2
+SELECT count(f.status)
+FROM dst_project.flights f
+WHERE f.status = 'Departed'
+
+4.2.3
+SELECT count(s.seat_no)
+FROM dst_project.seats s
+WHERE s.aircraft_code = '773'
+
+4.2.4
+SELECT count(f.flight_id)
+FROM dst_project.flights f
+WHERE f.scheduled_arrival BETWEEN '2017-04-01' AND '2017-09-01'
+  AND f.status = 'Arrived'
+
+4.3.1
+SELECT count(f.flight_id)
+FROM dst_project.flights f
+WHERE f.status = 'Cancelled'
+
+4.3.2
+SELECT count(a.model)
+FROM dst_project.aircrafts a
+WHERE a.model like 'Boeing%' -- Аналогично Sukhoi Superjet и Airbus
+
+4.3.3
+SELECT 'Europe' namezone,
+                count(a.timezone)
+FROM dst_project.airports a
+WHERE a.timezone like '%Europe%'
+UNION ALL
+SELECT 'Asia' namezone,
+              count(a.timezone)
+FROM dst_project.airports a
+WHERE a.timezone like '%Asia%'
+UNION ALL
+SELECT 'Australia' namezone,
+                   count(a.timezone)
+FROM dst_project.airports a
+WHERE a.timezone like '%Australia%'
+
+4.3.4
+SELECT f.flight_id,
+       f.actual_arrival - f.scheduled_arrival AS diff_arrival
+FROM dst_project.flights f
+WHERE f.scheduled_arrival < f.actual_arrival
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 1
+
+4.4.1
+SELECT f.scheduled_departure
+FROM dst_project.flights f
+ORDER BY 1
+LIMIT 1
+
+4.4.2
+SELECT max(EXTRACT (epoch
+                    FROM (f.scheduled_arrival - f.scheduled_departure))) / 60 AS duration_minutes
+FROM dst_project.flights AS f;
+
+4.4.3
+SELECT f.departure_airport,
+       f.arrival_airport,
+       (f.scheduled_arrival-f.scheduled_departure) AS fligt_time
+FROM dst_project.flights f
+ORDER BY 3 DESC
+LIMIT 1
+
+4.4.4
+SELECT avg((EXTRACT (epoch
+                     FROM (f.scheduled_arrival - f.scheduled_departure))) / 60)::int
+FROM dst_project.flights f
+
+4.5.1
+SELECT s.fare_conditions,
+       count(s.seat_no)
+FROM dst_project.seats s
+GROUP BY 1
+ORDER BY 2 DESC
+LIMIT 1
+
+4.5.2
+SELECT min(b.total_amount)
+FROM dst_project.bookings b
+
+4.5.3
+SELECT p.seat_no
+FROM dst_project.tickets t
+JOIN dst_project.boarding_passes p ON t.ticket_no = p.ticket_no
+WHERE t.passenger_id = '4313 788533'
+
+5.1
+SELECT count(f.flight_id)
+FROM dst_project.flights f
+JOIN dst_project.airports a ON f.arrival_airport = a.airport_code
+WHERE a.city = 'Anapa'
+  AND f.status = 'Arrived'
+  AND (date_part('year', actual_departure) = 2017)
+
+5.2
+SELECT count(f.flight_id)
+FROM dst_project.flights f
+WHERE f.departure_airport = 'AAQ'
+  AND (date_trunc('month', f.scheduled_departure) in ('2017-01-01',
+                                                      '2017-02-01',
+                                                      '2017-12-01'))
+  AND status not in ('Cancelled')
+
+5.3
+select
+    count(f.flight_id)
+from
+    dst_project.flights f
+    join dst_project.airports a
+    on f.departure_airport = a.airport_code
+where 
+    a.city = 'Anapa'
+    and f.status = 'Cancelled'
+
+5.4
+SELECT count(f.flight_id)
+FROM dst_project.flights f
+JOIN dst_project.airports a ON f.departure_airport = a.airport_code
+WHERE a.city = 'Anapa'
+  AND f.status = 'Cancelled'
+
+5.5
+WITH a AS
+  (SELECT a.aircraft_code,
+          a.model,
+          count(s.seat_no) count_seats
+   FROM dst_project.aircrafts a
+   JOIN dst_project.seats s ON a.aircraft_code = s.aircraft_code
+   GROUP BY 1,
+            2)
+SELECT a.model,
+       max(a.count_seats)
+FROM dst_project.flights f
+JOIN a ON f.aircraft_code = a.aircraft_code
+WHERE departure_airport = 'AAQ'
+GROUP BY 1
+LIMIT 1
+
+Запрос для итогового Dataset:
+
+WITH char_models AS
+  (SELECT 'Boeing 737-300' model,
+                           2600.0/60 AS fuel_consumption, --расход топлива в минуту
+ 149 AS capacity, -- предельная вместимость
+ 35 AS fuel_price -- цена за литр топлива
+UNION SELECT 'Sukhoi Superjet-100' model,
+                                   1700.0/60 AS fuel_consumption, --расход топлива в минуту
+ 98 AS capacity, -- предельная вместимость
+ 35 AS fuel_price -- цена за литр топлива
+),
+     passenger_data AS
+  (SELECT tf.flight_id,
+          count(tf.amount) count_passenger, -- количество пассажиров на рейсе
+ sum(tf.amount) total_amount -- общая стоимость билетов
+FROM dst_project.ticket_flights tf
+   GROUP BY 1),
+     ft AS
+  (SELECT f.flight_id,
+          (EXTRACT (epoch
+                    FROM (f.actual_arrival - f.actual_departure)) / 60)::int AS flight_times -- реальное время полета в минутах
+FROM dst_project.flights f
+   WHERE f.departure_airport = 'AAQ'
+     AND (date_trunc('month', f.scheduled_departure) in ('2017-01-01',
+                                                         '2017-02-01',
+                                                         '2017-12-01'))
+     AND status not in ('Cancelled') )
+SELECT f.flight_id,
+       'Anapa' city_departure, -- город отправления
+ ports.city city_arrival, -- город прилета
+ p.count_passenger/cm.capacity::float AS occupancy, -- заполняемость самолета пассажирами
+ p.total_amount, -- общая стоимость билетов на рейсе
+ ft.flight_times, -- время в полете
+ crafts.model, -- модель самолета
+ cm.fuel_consumption, -- расход топлива в минуту
+ ft.flight_times*cm.fuel_consumption*cm.fuel_price AS flight_cost, -- стоимость прелета (топлива на рейс)
+ p.total_amount - (ft.flight_times*cm.fuel_consumption*cm.fuel_price) flight_profit -- прибыльность рейса
+FROM dst_project.flights f
+JOIN dst_project.airports ports ON ports.airport_code = f.arrival_airport
+JOIN dst_project.aircrafts crafts ON crafts.aircraft_code = f.aircraft_code
+JOIN char_models cm ON crafts.model = cm.model
+LEFT JOIN passenger_data p ON p.flight_id = f.flight_id
+JOIN ft ON ft.flight_id = f.flight_id
+WHERE f.departure_airport = 'AAQ'
+  AND (date_trunc('month', f.scheduled_departure) in ('2017-01-01',
+                                                      '2017-02-01',
+                                                      '2017-12-01'))
+  AND status not in ('Cancelled')
+ORDER BY flight_profit -- сортирую по прибыльности рейсов
